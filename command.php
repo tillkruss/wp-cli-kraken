@@ -179,8 +179,8 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 			$images->post_count,
 			_n( 'attachment', 'attachments', $images->post_count ),
 			$this->limit === -1
-				? 'Kraking all found images.'
-				: sprintf( 'Kraking first %s %s found.', $this->limit, _n( 'image', 'images', $this->limit ) )
+				? 'Kraking all images.'
+				: sprintf( 'Kraking a maximum of %d %s.', $this->limit, _n( 'image', 'images', $this->limit ) )
 		) );
 
 		$skipping = 'Skipping already kraked images (comparing %s).';
@@ -195,10 +195,10 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 			strtoupper( $this->config[ 'types' ] )
 		) );
 
-		// check all image sizes for each attachment
+		// loop through all attachments and check all image sizes for each one
 		foreach ( $images->posts as $id ) {
 			if ( ! $this->_check_image_sizes( $id ) ) {
-				break;
+				break; // limit has been reached
 			}
 		}
 
@@ -260,7 +260,7 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 					if ( curl_errno( $ch ) ) {
 
 						// show warning if a cURL occurred
-						WP_CLI::warning( sprintf( 'Kraken API credentials validation failed. (cURL error [%s]: %s)', curl_errno( $ch ), curl_error( $ch ) ) );
+						WP_CLI::warning( sprintf( 'Kraken API credentials validation failed. (cURL error [%d]: %s)', curl_errno( $ch ), curl_error( $ch ) ) );
 
 					} else {
 
@@ -516,7 +516,7 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 
 		// show warning if a cURL occurred
 		if ( curl_errno( $ch ) ) {
-			WP_CLI::warning( sprintf( 'Kraked image upload failed. (cURL error [%s]: %s)', curl_errno( $ch ), curl_error( $ch ) ) );
+			WP_CLI::warning( sprintf( 'Kraked image upload failed. (cURL error [%d]: %s)', curl_errno( $ch ), curl_error( $ch ) ) );
 			$this->statistics[ 'failed' ]++;
 			curl_close( $ch );
 			return;
@@ -533,6 +533,8 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 
 				// was the orginal image backed up and replaced by kraked image?
 				if ( $this->_replace_image( $attachment_id, $filepath, $response[ 'kraked_url' ], $response[ 'kraked_size' ] ) ) {
+
+					$this->_set_image_kraken_metadata( $attachment_id, $filepath );
 
 					WP_CLI::line( sprintf(
 						'Kraked %s (Kraked size: %s, Savings: %s / %s%%)',
@@ -551,6 +553,8 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 				}
 
 			} else {
+
+				$this->_set_image_kraken_metadata( $attachment_id, $filepath );
 
 				WP_CLI::line( 'Image can not be optimized any further.' );
 				$this->statistics[ 'samesize' ]++;
@@ -589,7 +593,7 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 		curl_exec( $ch );
 
 		if ( curl_errno( $ch ) ) {
-			WP_CLI::warning( sprintf( 'Kraked image download failed. (cURL error [%s]: %s)', curl_errno( $ch ), curl_error( $ch ) ) );
+			WP_CLI::warning( sprintf( 'Kraked image download failed. (cURL error [%d]: %s)', curl_errno( $ch ), curl_error( $ch ) ) );
 		}
 
 		curl_close( $ch );
@@ -602,15 +606,6 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 
 				// was the kraked image renamed to filename of original image?
 				if ( rename( $krakedpath, $filepath ) ) {
-
-					// store new kraken metadata for this file
-					$kraken_metadata = $this->_get_image_kraken_metadata( $attachment_id );
-					$kraken_metadata[ basename( $filepath ) ] = array(
-						'md4' => hash_file( 'md4', $filepath ),
-						'mtime' => gmdate( 'U', filemtime( $filepath ) )
-					);
-					$this->kraken_metadata[ $attachment_id ] = $kraken_metadata;
-					update_post_meta( $attachment_id, '_kraken_metadata', $kraken_metadata );
 
 					return true;
 
@@ -671,6 +666,29 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 	}
 
 	/**
+	 * Set or update kraken metadata for given image.
+	 *
+	 * @param mixed $attachment_id ID of the associated attachment.
+	 * @param mixed $filepath Absolute path to image.
+	 * @return void
+	 */
+	private function _set_image_kraken_metadata( $attachment_id, $filepath ) {
+
+		$kraken_metadata = $this->_get_image_kraken_metadata( $attachment_id );
+
+		$kraken_metadata[ basename( $filepath ) ] = array(
+			'md4' => hash_file( 'md4', $filepath ),
+			'mtime' => gmdate( 'U', filemtime( $filepath ) )
+		);
+
+		update_post_meta( $attachment_id, '_kraken_metadata', $kraken_metadata );
+
+		// update metadata cache
+		$this->kraken_metadata[ $attachment_id ] = $kraken_metadata;
+
+	}
+
+	/**
 	 * Parses given comma-separated types into array and returns it.
 	 * If `$map` is `true`, the returned array will contain MIME types, instead of given types.
 	 * Returns `false` if none or invalid types are passed.
@@ -714,25 +732,73 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 	 */
 	private function _show_report() {
 
-		WP_CLI::line( sprintf( '%s attachments (%s images) checked.', $this->statistics[ 'attachments' ], $this->statistics[ 'files' ] ) );
-		WP_CLI::line( sprintf( '%s images with no kraken metadata.', $this->statistics[ 'unknown' ] ) );
-		WP_CLI::line( sprintf( '%s images checked for changes.', $this->statistics[ 'compared' ] ) );
-		WP_CLI::line( sprintf( '%s modified images found.', $this->statistics[ 'changed' ] ) );
+		WP_CLI::line( sprintf(
+			'%d %s (%s %s) checked.',
+			$this->statistics[ 'attachments' ],
+			_n( 'attachment', 'attachments', $this->statistics[ 'attachments' ] ),
+			$this->statistics[ 'files' ],
+			_n( 'image', 'images', $this->statistics[ 'files' ] )
+		) );
+
+		WP_CLI::line( sprintf(
+			'%d %s with no kraken metadata.',
+			$this->statistics[ 'unknown' ],
+			_n( 'image', 'images', $this->statistics[ 'unknown' ] )
+		) );
+
+		WP_CLI::line( sprintf(
+			'%d %s checked for changes.',
+			$this->statistics[ 'compared' ],
+			_n( 'image', 'images', $this->statistics[ 'compared' ] )
+		) );
+
+		WP_CLI::line( sprintf(
+			'%d modified %s found.',
+			$this->statistics[ 'changed' ],
+			_n( 'image', 'images', $this->statistics[ 'changed' ] )
+		) );
 
 		if ( $this->dryrun ) {
-			WP_CLI::line( sprintf( '%s images will be kraked.', $this->statistics[ 'changed' ] + $this->statistics[ 'unknown' ] ) );
+
+			$kraking = $this->statistics[ 'changed' ] + $this->statistics[ 'unknown' ];
+			WP_CLI::line( sprintf(
+				'%d %s will be kraked.',
+				$kraking,
+				_n( 'image', 'images', $kraking )
+			) );
+
 			return;
+
 		}
 
-		WP_CLI::line( sprintf( '%s images uploaded.', $this->statistics[ 'uploaded' ] ) );
-		WP_CLI::line( sprintf( '%s images successfully kraked.', $this->statistics[ 'kraked' ] ) );
-		WP_CLI::line( sprintf( '%s images already fully optimized.', $this->statistics[ 'samesize' ] ) );
-		WP_CLI::line( sprintf( '%s images failed to kraken.', $this->statistics[ 'failed' ] ) );
+		WP_CLI::line( sprintf(
+			'%d %s uploaded.',
+			$this->statistics[ 'uploaded' ],
+			_n( 'image', 'images', $this->statistics[ 'uploaded' ] )
+		) );
+
+		WP_CLI::line( sprintf(
+			'%d %s successfully kraked.',
+			$this->statistics[ 'kraked' ],
+			_n( 'image', 'images', $this->statistics[ 'kraked' ] )
+		) );
+
+		WP_CLI::line( sprintf(
+			'%d %s already fully optimized.',
+			$this->statistics[ 'samesize' ],
+			_n( 'image', 'images', $this->statistics[ 'samesize' ] )
+		) );
+
+		WP_CLI::line( sprintf(
+			'%d %s failed to kraken.',
+			$this->statistics[ 'failed' ],
+			_n( 'image', 'images', $this->statistics[ 'failed' ] )
+		) );
 
 		if ( $this->statistics[ 'size' ] > 0 && $this->statistics[ 'saved' ] > 0 ) {
 
 			WP_CLI::line( sprintf(
-				'%s compressed to %s. Savings: %s',
+				'%s compressed to %s. Savings: %s%%',
 				size_format( $this->statistics[ 'size' ], 2 ),
 				size_format( $this->statistics[ 'saved' ], 2 ),
 				round( abs( ( $this->statistics[ 'saved' ] / $this->statistics[ 'size' ] ) * 100 ), 2 )
