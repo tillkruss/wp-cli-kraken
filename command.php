@@ -197,7 +197,9 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 
 		// check all image sizes for each attachment
 		foreach ( $images->posts as $id ) {
-			$this->_check_image_sizes( $id );
+			if ( ! $this->_check_image_sizes( $id ) ) {
+				break;
+			}
 		}
 
 		$this->_show_report();
@@ -367,9 +369,10 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 	 * Finds all image sizes (thumbnail, medium, etc.) of given attachment.
 	 * Calls `_kraken_image()` directly for each image that has no Kraken metadata.
 	 * Calls `_maybe_kraken_image()` images that have Kraken metadata for comparison.
+	 * Returns `false` if image limit has been reached, otherwise `true`.
 	 *
 	 * @param int $attachment_id Attachment ID.
-	 * @return void
+	 * @return bool
 	 */
 	private function _check_image_sizes( $attachment_id ) {
 
@@ -390,6 +393,8 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 			}
 		}
 
+		$this->statistics[ 'attachments' ]++;
+
 		foreach ( $files as $path ) {
 
 			// krake all images that have no kraken metadata
@@ -403,9 +408,24 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 
 			$this->statistics[ 'files' ]++;
 
+			// if a limit is set, return `false` once it's reached
+			if ( $this->limit !== -1 ) {
+
+				if ( $this->dryrun ) {
+					if ( $this->statistics[ 'kraked' ] >= $this->limit ) {
+						return false;
+					}
+				} else {
+					if ( ( $this->statistics[ 'uploaded' ] + $this->statistics[ 'failed' ] ) >= $this->limit ) {
+						return false;
+					}
+				}
+
+			}
+
 		}
 
-		$this->statistics[ 'attachments' ]++;
+		return true;
 
 	}
 
@@ -642,14 +662,6 @@ class WP_CLI_Kraken extends WP_CLI_Command {
 		if ( empty( $kraken_metadata ) ) {
 			$kraken_metadata = array();
 		}
-
-
-####
-// ToDo: THIS IS DEBUG...
-####
-$kraken_metadata = array();
-
-
 
 		// cache metadata
 		$this->kraken_metadata[ $attachment_id ] = $kraken_metadata;
