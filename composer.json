@@ -1,6 +1,7 @@
 {
 	"name": "tillkruss/wp-cli-kraken",
 	"description": "WP-CLI command to optimize WordPress image attachments using the Kraken Image Optimizer.",
+	"type": "wp-cli-package",
 	"homepage": "https://github.com/tillkruss/wp-cli-kraken",
 	"license": "MIT",
 	"authors": [
